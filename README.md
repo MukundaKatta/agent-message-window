@@ -1,34 +1,8 @@
 # agent-message-window
 
-[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/agent-message-window.svg)](https://pypi.org/project/agent-message-window/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+A sliding message window for LLM agent loops that keeps `tool_use`/`tool_result` pairs intact.
 
-**Sliding window of recent LLM conversation turns, with paired-protection: never drop a `tool_use` without its `tool_result` sibling.** Zero deps.
-
-```python
-from agent_message_window import MessageWindow
-
-win = MessageWindow(max_turns=20, paired_protect=True)
-
-win.add({"role": "user", "content": "search for X"})
-win.add({"role": "assistant", "content": [
-    {"type": "tool_use", "id": "u1", "name": "search", "input": {"q": "X"}},
-]})
-win.add({"role": "user", "content": [
-    {"type": "tool_result", "tool_use_id": "u1", "content": "found Y"},
-]})
-
-win.messages          # current window, oldest → newest
-win.evicted_count     # total messages dropped to date
-```
-
-## Why
-
-A naive "keep the last N messages" loop breaks the moment the boundary falls between a `tool_use` and its `tool_result`. Anthropic's API rejects the request: a tool_result needs its tool_use in history (and a tool_use needs its tool_result on the next user turn).
-
-`MessageWindow` is the smallest version of that bookkeeping. When the oldest message is an assistant `tool_use`, the eviction step also drops any `tool_result` messages that reference the evicted tool_use IDs. Pair-aware eviction is `paired_protect=True` by default; turn it off if your downstream sanitization handles orphans separately.
-
-For *token-aware* truncation (vs turn-count), use [`agentfit`](https://github.com/MukundaKatta/agentfit). For full conversation persistence, use [`conversation-codec`](https://github.com/MukundaKatta/conversation-codec).
+The Anthropic Messages API rejects a message list where a `tool_use` block appears without a matching `tool_result` in the next message. This library's `AgentMessageWindow` enforces that constraint automatically when trimming old messages.
 
 ## Install
 
@@ -36,28 +10,65 @@ For *token-aware* truncation (vs turn-count), use [`agentfit`](https://github.co
 pip install agent-message-window
 ```
 
-## API
+## Usage
 
 ```python
-win = MessageWindow(max_turns: int, *, paired_protect: bool = True)
+from agent_message_window import AgentMessageWindow
 
-win.add(message: dict)
-win.extend(messages: Iterable[dict])
-win.clear()
+window = AgentMessageWindow(
+    max_messages=20,
+    system={"role": "system", "content": "Be helpful."},
+)
 
-win.messages -> list[dict]       # copy, oldest first
-len(win); iter(win)
-win.max_turns -> int
-win.evicted_count -> int         # cumulative drops
+# Add messages as your agent loop runs
+window.add({"role": "user", "content": "Search for climate data"})
+window.add({
+    "role": "assistant",
+    "content": [{"type": "tool_use", "id": "t1", "name": "search", "input": {}}],
+})
+window.add({
+    "role": "user",
+    "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "..."}],
+})
+
+# Safe to send — tool pairs are never split when trimming
+messages = window.messages
 ```
 
-`add()` rejects non-dict input with `TypeError`. Stored messages are shallow-copied so caller-side mutation doesn't corrupt the window.
+## API
 
-## Companion libraries
+### `AgentMessageWindow(max_messages=None, *, system=None)`
 
-- [`agentfit`](https://github.com/MukundaKatta/agentfit) — token-aware truncation when turn-count alone isn't enough.
-- [`conversation-codec`](https://github.com/MukundaKatta/conversation-codec) — JSONL save/load with optional redaction + Fernet encryption.
-- [`prompt-token-counter`](https://github.com/MukundaKatta/prompt-token-counter) — measure window cost before sending.
+| Parameter | Description |
+|-----------|-------------|
+| `max_messages` | Maximum non-system messages. `None` = unbounded. |
+| `system` | Optional system message prepended to `.messages` (not counted toward the window). |
+
+### Mutations (all chainable)
+
+| Method | Description |
+|--------|-------------|
+| `add(message)` | Append one message, trim oldest if needed. |
+| `add_many(messages)` | Append multiple messages. |
+| `clear()` | Remove all messages. |
+| `replace(messages)` | Replace the entire window. |
+
+### Queries
+
+| Property/Method | Description |
+|-----------------|-------------|
+| `messages` | Deep copy of the current window (with system prepended if set). |
+| `count` | Number of non-system messages. |
+| `is_empty` | `True` when the window is empty. |
+| `max_messages` | Configured window size. |
+| `last(n=1)` | Last *n* messages (deep copy, no system). |
+| `first(n=1)` | First *n* messages (deep copy, no system). |
+
+### Exceptions
+
+| Exception | When |
+|-----------|------|
+| `WindowOverflowError` | A single atomic group exceeds `max_messages`. |
 
 ## License
 
