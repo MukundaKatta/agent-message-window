@@ -125,10 +125,17 @@ class AgentMessageWindow:
 
         Raises:
             WindowOverflowError: If the message cannot fit even after dropping
-                                 all other messages.
+                                 all other messages.  In that case the window is
+                                 left unchanged (the message is *not* added).
         """
+        previous = self._messages
+        self._messages = list(previous)
         self._messages.append(copy.deepcopy(message))
-        self._trim()
+        try:
+            self._trim()
+        except WindowOverflowError:
+            self._messages = previous
+            raise
         return self
 
     def add_many(self, messages: list[dict[str, Any]]) -> AgentMessageWindow:
@@ -163,10 +170,16 @@ class AgentMessageWindow:
             ``self`` for chaining.
 
         Raises:
-            WindowOverflowError: If the replacement list is too large.
+            WindowOverflowError: If the replacement list is too large.  In that
+                                 case the window is left unchanged.
         """
+        previous = self._messages
         self._messages = [copy.deepcopy(m) for m in messages]
-        self._trim()
+        try:
+            self._trim()
+        except WindowOverflowError:
+            self._messages = previous
+            raise
         return self
 
     # ------------------------------------------------------------------
@@ -229,26 +242,33 @@ class AgentMessageWindow:
     # ------------------------------------------------------------------
 
     def _trim(self) -> None:
-        """Trim oldest atomic groups until the window fits."""
+        """Trim oldest atomic groups until the window fits.
+
+        Atomic ``tool_use``/``tool_result`` groups are dropped whole, oldest
+        first, until the remaining messages fit within ``max_messages``.  If a
+        single atomic group is itself larger than the window it can never fit,
+        so :class:`WindowOverflowError` is raised *before* any messages are
+        discarded — silently dropping the offending group would leave the
+        window in a state that no longer matches what the caller added.
+        """
         if self._max is None:
             return
         groups = _group_messages(self._messages)
+        # Drop oldest groups until the total fits.  A group whose own size
+        # exceeds the window can never fit, so detect that and raise rather
+        # than silently dropping it (which the old implementation did).
         while sum(len(g) for g in groups) > self._max:
-            if not groups:
-                break
+            oldest = groups[0]
+            if len(oldest) > self._max:
+                raise WindowOverflowError(
+                    f"Cannot fit messages in window of {self._max}: "
+                    f"atomic group of {len(oldest)} messages is too large"
+                )
             groups.pop(0)
-            if not groups:
-                # Everything was dropped — remaining check happens below.
-                break
-        # Flatten back
+        # Flatten the surviving groups back into a flat message list.
         flat: list[dict[str, Any]] = []
         for g in groups:
             flat.extend(g)
-        if self._max is not None and len(flat) > self._max:
-            raise WindowOverflowError(
-                f"Cannot fit messages in window of {self._max}: "
-                f"atomic group of {len(flat)} messages is too large"
-            )
         self._messages = flat
 
     def __repr__(self) -> str:
