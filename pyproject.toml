@@ -20,14 +20,20 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries",
+    "Typing :: Typed",
 ]
 
 [project.optional-dependencies]
+# Tests use the standard library `unittest` and need no extra packages;
+# these are only for linting/formatting and the optional pytest runner.
 dev = ["pytest>=7", "ruff>=0.4"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_message_window"]
+# Ship the PEP 561 marker so type checkers honour the inline annotations.
+artifacts = ["src/agent_message_window/py.typed"]
 
 [tool.ruff]
 line-length = 88
