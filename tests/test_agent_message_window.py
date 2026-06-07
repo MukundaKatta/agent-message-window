@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_message_window import AgentMessageWindow
+from agent_message_window import AgentMessageWindow, WindowOverflowError
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -318,3 +318,59 @@ def test_last_zero():
     w = AgentMessageWindow()
     w.add(_user())
     assert w.last(0) == []
+
+
+# ---------------------------------------------------------------------------
+# WindowOverflowError — atomic group larger than the window
+# ---------------------------------------------------------------------------
+
+
+def test_oversized_pair_raises_on_add():
+    # A tool_use/tool_result pair is atomic (size 2) and cannot fit a window
+    # of 1, so completing the pair must raise rather than silently drop it.
+    w = AgentMessageWindow(max_messages=1)
+    w.add(_tool_use("t1"))
+    with pytest.raises(WindowOverflowError):
+        w.add(_tool_result("t1"))
+
+
+def test_oversized_pair_leaves_window_unchanged_on_add():
+    w = AgentMessageWindow(max_messages=1)
+    w.add(_tool_use("t1"))
+    before = w.messages
+    with pytest.raises(WindowOverflowError):
+        w.add(_tool_result("t1"))
+    # The failed add must not corrupt the window.
+    assert w.messages == before
+    assert w.count == 1
+
+
+def test_oversized_pair_raises_on_replace():
+    w = AgentMessageWindow(max_messages=1)
+    with pytest.raises(WindowOverflowError):
+        w.replace([_tool_use("t1"), _tool_result("t1")])
+
+
+def test_oversized_replace_leaves_window_unchanged():
+    w = AgentMessageWindow(max_messages=1)
+    w.add(_user("keep"))
+    before = w.messages
+    with pytest.raises(WindowOverflowError):
+        w.replace([_tool_use("t1"), _tool_result("t1")])
+    assert w.messages == before
+
+
+def test_pair_fits_exactly_does_not_raise():
+    # Exactly window-sized atomic group must be kept, not raised.
+    w = AgentMessageWindow(max_messages=2)
+    w.add(_user("a"))
+    w.add(_tool_use("t1"))
+    w.add(_tool_result("t1"))
+    assert w.count == 2
+    types = {
+        b.get("type")
+        for m in w.messages
+        if isinstance(m["content"], list)
+        for b in m["content"]
+    }
+    assert types == {"tool_use", "tool_result"}

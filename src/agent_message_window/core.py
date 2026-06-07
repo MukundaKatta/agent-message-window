@@ -125,10 +125,16 @@ class AgentMessageWindow:
 
         Raises:
             WindowOverflowError: If the message cannot fit even after dropping
-                                 all other messages.
+                                 all other messages.  The window is left
+                                 unchanged in that case.
         """
-        self._messages.append(copy.deepcopy(message))
-        self._trim()
+        previous = self._messages
+        self._messages = [*previous, copy.deepcopy(message)]
+        try:
+            self._trim()
+        except WindowOverflowError:
+            self._messages = previous
+            raise
         return self
 
     def add_many(self, messages: list[dict[str, Any]]) -> AgentMessageWindow:
@@ -163,10 +169,16 @@ class AgentMessageWindow:
             ``self`` for chaining.
 
         Raises:
-            WindowOverflowError: If the replacement list is too large.
+            WindowOverflowError: If the replacement list is too large.  The
+                                 window is left unchanged in that case.
         """
+        previous = self._messages
         self._messages = [copy.deepcopy(m) for m in messages]
-        self._trim()
+        try:
+            self._trim()
+        except WindowOverflowError:
+            self._messages = previous
+            raise
         return self
 
     # ------------------------------------------------------------------
@@ -229,26 +241,30 @@ class AgentMessageWindow:
     # ------------------------------------------------------------------
 
     def _trim(self) -> None:
-        """Trim oldest atomic groups until the window fits."""
+        """Trim oldest atomic groups until the window fits.
+
+        Raises:
+            WindowOverflowError: If a single atomic group is larger than the
+                window, making it impossible to fit.  When this happens the
+                window is left unchanged.
+        """
         if self._max is None:
             return
         groups = _group_messages(self._messages)
-        while sum(len(g) for g in groups) > self._max:
-            if not groups:
-                break
+        # Drop oldest groups while the total exceeds the window, but never drop
+        # the final remaining group: if that single group is still too large it
+        # cannot be split, so we surface the error instead of silently losing it.
+        while len(groups) > 1 and sum(len(g) for g in groups) > self._max:
             groups.pop(0)
-            if not groups:
-                # Everything was dropped — remaining check happens below.
-                break
+        if groups and len(groups[0]) > self._max:
+            raise WindowOverflowError(
+                f"Cannot fit messages in window of {self._max}: "
+                f"atomic group of {len(groups[0])} messages is too large"
+            )
         # Flatten back
         flat: list[dict[str, Any]] = []
         for g in groups:
             flat.extend(g)
-        if self._max is not None and len(flat) > self._max:
-            raise WindowOverflowError(
-                f"Cannot fit messages in window of {self._max}: "
-                f"atomic group of {len(flat)} messages is too large"
-            )
         self._messages = flat
 
     def __repr__(self) -> str:
